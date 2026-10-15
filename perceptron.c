@@ -16,7 +16,7 @@
 
 /* Fonctions d'activation */
 double ponderated_sum(double e[], double w[], int nb);
-void calc_column(double in[], double out[], double coefs[], int nb);
+void calc_column(int nb, double in[], double out[], double coefs[][nb]);
 double act_tanh(double x);
 void softmax(const double in[], double out[], int nb);
 
@@ -77,7 +77,7 @@ for (int j = 0; j < NB_neurones_C1; j++){
 
 
 double C1_out_prime[NB_neurones_C1];
-calc_column(jeux_test_lineaire[0], C1_out_prime, coef_MAT1, NB_neurones_C1);
+calc_column(NB_neurones_C1, jeux_test_lineaire[0], C1_out_prime, coef_MAT1);
 
 double C2_out[NB_neurones_C2];
 for (int j = 0; j < NB_neurones_C2; j++){
@@ -127,14 +127,14 @@ double act_tanh(double x) {
 }
 
 
-double calc_column(double in[], double out[], double coefs[], int nb) {
+void calc_column(int nb, double in[], double out[], double coefs[][nb]) {
     for (int j = 0; j < nb; j++){
         double C_coefs[TAILLE_entree];
         for (int i = 0; i <= TAILLE_entree; i++) {
             C_coefs[i] = coefs[i][j]; // slicing in c
         }
-        double unormalized_out[j] = ponderated_sum(in, C_coefs, nb);
-        out[j] = act_tanh(unormalized_out[j]);
+        double unormalized_out = ponderated_sum(in, C_coefs, nb);
+        out[j] = act_tanh(unormalized_out);
         printf("C1 > %.2F\n", out[j]);
     }
 }
