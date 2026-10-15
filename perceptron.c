@@ -15,10 +15,12 @@
 
 
 /* Fonctions d'activation */
+void act_tanh(double x[], double y[], int nb);
+void softmax(const double in[], double out[], int nb);
+
+/* Fonctions des neurones */
 double ponderated_sum(double e[], double w[], int nb);
 void calc_column(int nb, double in[], double out[], double coefs[][nb]);
-double act_tanh(double x);
-void softmax(const double in[], double out[], int nb);
 
 
 int main(int argc, char **argv)
@@ -64,29 +66,19 @@ double coef_MAT2[NB_neurones_C1+1][NB_neurones_C2] =
 			{-3.30, +1.42, -1.22 }}; // ---> bias
 
 
+/* ROUTINE OF C1 AND C2 */
+double C1_out_lin[NB_neurones_C1];
 double C1_out[NB_neurones_C1];
-for (int j = 0; j < NB_neurones_C1; j++){
-    double C1_coefs[TAILLE_entree];
-    for (int i = 0; i <= TAILLE_entree; i++) {
-        C1_coefs[i] = coef_MAT1[i][j]; // slicing in c
-    }
-    C1_out[j] = ponderated_sum(jeux_test_lineaire[0], C1_coefs, NB_neurones_C1);
-    C1_out[j] = act_tanh(C1_out[j]);
-    printf("C1 > %.2F\n", C1_out[j]);
-}
-
-
-double C1_out_prime[NB_neurones_C1];
-calc_column(NB_neurones_C1, jeux_test_lineaire[0], C1_out_prime, coef_MAT1);
+calc_column(NB_neurones_C1, jeux_test_lineaire[0], C1_out_lin, coef_MAT1);
+act_tanh(C1_out_lin, C1_out, NB_neurones_C1);
 
 double C2_out[NB_neurones_C2];
-for (int j = 0; j < NB_neurones_C2; j++){
-    double C2_coefs[TAILLE_entree];
-    for (int i = 0; i <= TAILLE_entree; i++) {
-        C2_coefs[i] = coef_MAT2[i][j]; // slicing in c
-    }
-    C2_out[j] = ponderated_sum(C1_out, C2_coefs, NB_neurones_C2);
-    printf("C2 > %.2F\n", C2_out[j]);
+double out[NB_neurones_C2];
+calc_column(NB_neurones_C2, C1_out, C2_out, coef_MAT2);
+softmax(C2_out, out, NB_neurones_C2);
+
+for (int i=0; i<NB_neurones_C2; i++){
+    printf("out: %.15F\n", out[i]);
 }
 
 
@@ -122,8 +114,11 @@ void softmax(const double in[], double out[], int nb) {
 
 
 /* Fonction d'activation tanh */
-double act_tanh(double x) {
-    return tanh(x);
+void act_tanh(double x[], double y[], int nb) {
+    for (int i=0; i<nb; i++){
+        y[i] = tanh(x[i]);
+        printf("act = %.15F\n", y[i]);
+    }
 }
 
 
@@ -133,9 +128,8 @@ void calc_column(int nb, double in[], double out[], double coefs[][nb]) {
         for (int i = 0; i <= TAILLE_entree; i++) {
             C_coefs[i] = coefs[i][j]; // slicing in c
         }
-        double unormalized_out = ponderated_sum(in, C_coefs, nb);
-        out[j] = act_tanh(unormalized_out);
-        printf("C1 > %.2F\n", out[j]);
+        out[j] = ponderated_sum(in, C_coefs, nb);
+        printf("C1 > %.15F\n", out[j]);
     }
 }
 
