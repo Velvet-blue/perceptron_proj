@@ -8,7 +8,7 @@
 #define NB_neurones_C2 3	/* egal au nombre de sorties */
 
 /* 4 données d'entree et une valeur de sortie */
-#define TAILLE_entree	4
+#define N_entree	4
 
 /* Test avec 15 vecteurs d'entree */
 #define NB_data 15
@@ -19,8 +19,8 @@ void act_tanh(double x[], double y[], int nb);
 void softmax(const double in[], double out[], int nb);
 
 /* Fonctions des neurones */
-double ponderated_sum(double e[], double w[], int nb);
-void calc_column(int nb, double in[], double out[], double coefs[][nb]);
+double dot_column(int n_in, double in_aug[], double coefs[][NB_neurones_C1], int col_j);
+void process_column(int n_in, int n_out, double in[], double out[], double coefs[][n_out]);
 
 
 int main(int argc, char **argv)
@@ -49,10 +49,10 @@ int sortie_attendue[NB_data] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2};
 		
 /* Jeu de coefficients pour un réseau 4 entrées, 3 neurones couche1 */
 /* 3 neurones couches 2 et 3 sorties */		
-/* Les elements [TAILLE_entree][] de coef_MAT1 contiennent les biais*/
+/* Les elements [N_entree][] de coef_MAT1 contiennent les biais*/
 /* Les elements [NB_neurones_C1][] de coef_MAT2 contiennent les biais*/
 /* 13 sur 15 résultats (87%) correct avec cet ensemble de coefficients */
-double coef_MAT1[TAILLE_entree+1][NB_neurones_C1] = 
+double coef_MAT1[N_entree+1][NB_neurones_C1] = 
 			{{ +1.70, +2.58, -1.87}, 
 			{+1.56, +4.04, -5.81}, 
 			{-2.68, -3.84, +4.21}, 
@@ -69,15 +69,15 @@ double coef_MAT2[NB_neurones_C1+1][NB_neurones_C2] =
 /* ROUTINE OF C1 AND C2 */
 double C1_out_lin[NB_neurones_C1];
 double C1_out[NB_neurones_C1];
-calc_column(NB_neurones_C1, jeux_test_lineaire[0], C1_out_lin, coef_MAT1);
+process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], C1_out_lin, coef_MAT1);
 act_tanh(C1_out_lin, C1_out, NB_neurones_C1);
 
 double C2_out[NB_neurones_C2];
 double out[NB_neurones_C2];
-calc_column(NB_neurones_C2, C1_out, C2_out, coef_MAT2);
+process_column(NB_neurones_C1, NB_neurones_C2, C1_out, C2_out, coef_MAT2);
 softmax(C2_out, out, NB_neurones_C2);
 
-for (int i=0; i<NB_neurones_C2; i++){
+for (int i = 0; i < NB_neurones_C2; i++){
     printf("out: %.15F\n", out[i]);
 }
 
@@ -115,31 +115,33 @@ void softmax(const double in[], double out[], int nb) {
 
 /* Fonction d'activation tanh */
 void act_tanh(double x[], double y[], int nb) {
-    for (int i=0; i<nb; i++){
+    for (int i = 0; i < nb; i++){
         y[i] = tanh(x[i]);
         printf("act = %.15F\n", y[i]);
     }
 }
 
 
-void calc_column(int nb, double in[], double out[], double coefs[][nb]) {
-    for (int j = 0; j < nb; j++){
-        double C_coefs[TAILLE_entree];
-        for (int i = 0; i <= TAILLE_entree; i++) {
-            C_coefs[i] = coefs[i][j]; // slicing in c
-        }
-        out[j] = ponderated_sum(in, C_coefs, nb);
+void process_column(int n_in, int n_out, double in[], double out[], double coefs[][n_out]) {
+    // 1. Creation of augmented input array
+    double in_aug[n_in + 1];
+    for (int i = 0; i < n_in; i++) {
+        in_aug[i] = in[i];
+    }
+    in_aug[n_in] = 1.0;  // for add the bias
+    
+    // 2. calculate ponderated sum with the bias
+    for (int j = 0; j < n_out; j++) {
+        out[j] = dot_column(n_in + 1, in_aug, coefs, j);
         printf("C1 > %.15F\n", out[j]);
     }
 }
 
 
-double ponderated_sum(double e[], double w[], int nb) {
-
-    // maybe it can receives a "bias" parameter rather than work with w[nb + 1]
-    double psum = 0.0;
-    for (int i = 0 ; i <= nb ; i++) {
-        psum += e[i]*w[i];
+double dot_column(int n_in, double in_aug[], double coefs[][NB_neurones_C1], int col_j) {
+    double p = 0.0;
+    for (int i = 0; i < n_in; i++) {
+        p += in_aug[i] * coefs[i][col_j];
     }
-    return w[nb + 1] + psum;
+    return p;
 }
