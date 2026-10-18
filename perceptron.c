@@ -15,7 +15,7 @@
 
 
 /* Fonctions d'activation */
-void act_tanh(double x[], double y[], int nb);
+void act_tanh(double x[], int nb);
 void softmax(const double in[], double out[], int nb);
 
 /* Fonctions des neurones */
@@ -52,14 +52,14 @@ int sortie_attendue[NB_data] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2};
 /* Les elements [N_entree][] de coef_MAT1 contiennent les biais*/
 /* Les elements [NB_neurones_C1][] de coef_MAT2 contiennent les biais*/
 /* 13 sur 15 résultats (87%) correct avec cet ensemble de coefficients */
-double coef_MAT1[N_entree+1][NB_neurones_C1] = 
+double coef_MAT1[N_entree + 1][NB_neurones_C1] = 
 			{{ +1.70, +2.58, -1.87}, 
 			{+1.56, +4.04, -5.81}, 
 			{-2.68, -3.84, +4.21}, 
 			{-0.02, -6.49, +6.97}, 
 			{-1.00, +5.00, -5.00}}; // ---> bias
 			
-double coef_MAT2[NB_neurones_C1+1][NB_neurones_C2] = 
+double coef_MAT2[NB_neurones_C1 + 1][NB_neurones_C2] = 
 			{{ +9.00, -10.75, -1.38},
 			{-1.12, +4.68, -5.82}, 
 			{-3.43, -5.32, +5.60}, 
@@ -67,22 +67,19 @@ double coef_MAT2[NB_neurones_C1+1][NB_neurones_C2] =
 
 
 /* ROUTINE OF C1 AND C2 */
-double C1_out_lin[NB_neurones_C1];
-double C1_out[NB_neurones_C1];
-process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], C1_out_lin, coef_MAT1);
-act_tanh(C1_out_lin, C1_out, NB_neurones_C1);
+double out_C1[NB_neurones_C1];
+process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], out_C1, coef_MAT1);
+act_tanh(out_C1, NB_neurones_C1);
 
-double C2_out[NB_neurones_C2];
+double out_C2[NB_neurones_C2];
+process_column(NB_neurones_C1, NB_neurones_C2, out_C1, out_C2, coef_MAT2);
+
 double out[NB_neurones_C2];
-process_column(NB_neurones_C1, NB_neurones_C2, C1_out, C2_out, coef_MAT2);
-softmax(C2_out, out, NB_neurones_C2);
+softmax(out_C2, out, NB_neurones_C2);
 
 for (int i = 0; i < NB_neurones_C2; i++){
     printf("out: %.15F\n", out[i]);
 }
-
-
-
 
 	return 0;
 }
@@ -114,10 +111,10 @@ void softmax(const double in[], double out[], int nb) {
 
 
 /* Fonction d'activation tanh */
-void act_tanh(double x[], double y[], int nb) {
+void act_tanh(double x[], int nb) {
     for (int i = 0; i < nb; i++){
-        y[i] = tanh(x[i]);
-        printf("act = %.15F\n", y[i]);
+        x[i] = tanh(x[i]);
+        printf("act = %.15F\n", x[i]);
     }
 }
 
