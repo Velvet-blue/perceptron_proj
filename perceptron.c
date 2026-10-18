@@ -2,6 +2,10 @@
 #include <stdio.h>
 #include <math.h>
 
+#include <unistd.h>  // pipe(), fork(), close(), read(), write(), _exit()
+#include <sys/types.h> // pid_t
+#include <sys/wait.h>
+
 
 /* Structure du réseau */
 #define NB_neurones_C1 3
@@ -66,19 +70,93 @@ double coef_MAT2[NB_neurones_C1 + 1][NB_neurones_C2] =
 			{-3.30, +1.42, -1.22 }}; // ---> bias
 
 
-/* ROUTINE OF C1 AND C2 */
-double out_C1[NB_neurones_C1];
-process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], out_C1, coef_MAT1);
-act_tanh(out_C1, NB_neurones_C1);
+/*      MAIN PROGRAM        */
 
-double out_C2[NB_neurones_C2];
-process_column(NB_neurones_C1, NB_neurones_C2, out_C1, out_C2, coef_MAT2);
 
-double out[NB_neurones_C2];
-softmax(out_C2, out, NB_neurones_C2);
+// creation of the pipes
 
-for (int i = 0; i < NB_neurones_C2; i++){
-    printf("out: %.15F\n", out[i]);
+int pipe_in[N_entree][2];
+int pipe_out[NB_neurones_C2][2];
+
+for (int i = 0; i < N_entree; i++) {
+    if (pipe(pipe_in[i]) < 0) {
+        perror("Fail when creating pipe_in");
+        exit(EXIT_FAILURE);
+    }
+}
+
+for (int i = 0; i < NB_neurones_C2; i++) {
+    if (pipe(pipe_out[i]) < 0) {
+        perror("Fail when creating pipe_out");
+        exit(EXIT_FAILURE);
+    }
+}
+
+
+// FORKING
+pid_t pid = fork();
+
+if (pid != 0) {
+    /* MONITOR */
+
+    // close unused ends
+    for (int i = 0; i < N_entree; i++) close(pipe_in[i][0]);  // dont read the inputs
+    for (int i = 0; i < NB_neurones_C2; i++) close(pipe_out[i][1]); // dont write the outputs
+
+    // write inputs
+    for (int i = 0; i < N_entree; i++) {
+        write(pipe_in[i][1], &jeux_test_lineaire[0][i], sizeof(double));
+    }
+
+    // read Application outputs
+    double out[NB_neurones_C2];
+    for (int i = 0; i < NB_neurones_C2; i++) {
+        read(pipe_out[i][0], &out[i], sizeof(double));
+    }
+    
+    // print outputs
+    printf("saída:\n[");
+    for (int i = 0; i < NB_neurones_C2; i++) {
+        printf("%.3F\t", out[i]);
+    }
+    printf("]");
+
+    wait(NULL);
+}
+
+else {
+    /* APPLICATION */
+    
+    // close unused ends
+    for (int i = 0; i < N_entree; i++) close(pipe_in[i][1]);  // dont read the inputs
+    for (int i = 0; i < NB_neurones_C2; i++) close(pipe_out[i][0]); // dont write the outputs
+
+    // read Monitor inputs
+    double in[N_entree];
+    for (int i = 0; i < N_entree; i++){
+        read(pipe_in[i][0], &in[i], sizeof(double));
+    }
+
+    // process the columns
+    double out_C1[NB_neurones_C1];
+    process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], out_C1, coef_MAT1);
+    act_tanh(out_C1, NB_neurones_C1);
+
+    double out_C2[NB_neurones_C2];
+    process_column(NB_neurones_C1, NB_neurones_C2, out_C1, out_C2, coef_MAT2);
+
+    double out[NB_neurones_C2];
+    softmax(out_C2, out, NB_neurones_C2);
+
+    // send outputs to Monitor
+    for (int i = 0; i < NB_neurones_C2; i++){
+        write(pipe_out[i][1], &out[i], sizeof(double));
+    }
+
+    // close descriptors before terminate
+    for (int i = 0; i < N_entree; i++) close(pipe_in[i][0]);
+    for (int i = 0; i < NB_neurones_C2; i++) close(pipe_out[i][1]);
+    _exit(0);
 }
 
 	return 0;
