@@ -23,7 +23,7 @@ void act_tanh(double x[], int nb);
 void softmax(const double in[], double out[], int nb);
 
 /* Fonctions des neurones */
-double dot_column(int n_in, double in_aug[], double coefs[][NB_neurones_C1], int col_j);
+double dot_column(int n_in, int n_out, double in_aug[], double coefs[][n_out], int col_j);
 void process_column(int n_in, int n_out, double in[], double out[], double coefs[][n_out]);
 
 
@@ -207,13 +207,13 @@ void process_column(int n_in, int n_out, double in[], double out[], double coefs
     
     // 2. calculate ponderated sum with the bias
     for (int j = 0; j < n_out; j++) {
-        out[j] = dot_column(n_in + 1, in_aug, coefs, j);
-        printf("C1 > %.15F\n", out[j]);
+        out[j] = dot_column(n_in + 1, n_out, in_aug, coefs, j);
+        // printf("C1 > %.15F\n", out[j]);
     }
 }
 
 
-double dot_column(int n_in, double in_aug[], double coefs[][NB_neurones_C1], int col_j) {
+double dot_column(int n_in, int n_out, double in_aug[], double coefs[][n_out], int col_j) {
     double p = 0.0;
     for (int i = 0; i < n_in; i++) {
         p += in_aug[i] * coefs[i][col_j];
