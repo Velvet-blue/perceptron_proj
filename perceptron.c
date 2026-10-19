@@ -93,6 +93,9 @@ for (int i = 0; i < NB_neurones_C2; i++) {
 }
 
 
+const int N_samples = sizeof(jeux_test_lineaire)/sizeof(jeux_test_lineaire[0]);
+
+
 // FORKING
 pid_t pid = fork();
 
@@ -104,22 +107,27 @@ if (pid != 0) {
     for (int i = 0; i < NB_neurones_C2; i++) close(pipe_out[i][1]); // dont write the outputs
 
     // write inputs
-    for (int i = 0; i < N_entree; i++) {
-        write(pipe_in[i][1], &jeux_test_lineaire[0][i], sizeof(double));
+    for (int i = 0; i < N_samples; i++) {
+        for (int j = 0; j < N_entree; j++) {
+            write(pipe_in[j][1], &jeux_test_lineaire[i][j], sizeof(double));
+        }
     }
 
     // read Application outputs
-    double out[NB_neurones_C2];
-    for (int i = 0; i < NB_neurones_C2; i++) {
-        read(pipe_out[i][0], &out[i], sizeof(double));
+    double out[N_samples][NB_neurones_C2];
+    for (int i = 0; i < N_samples; i++) {
+        for (int j = 0; j < NB_neurones_C2; j++) {
+            read(pipe_out[j][0], &out[i][j], sizeof(double));
     }
     
     // print outputs
+    for (int i = 0; i < N_samples; i++) {
     printf("saída:\n[");
-    for (int i = 0; i < NB_neurones_C2; i++) {
-        printf("%.3F\t", out[i]);
+        for (int j = 0; j < NB_neurones_C2; j++) {
+            printf("%.4F\t", out[i][j]);
     }
-    printf("]");
+        printf("]\n");
+    }
 
     wait(NULL);
 }
@@ -131,15 +139,18 @@ else {
     for (int i = 0; i < N_entree; i++) close(pipe_in[i][1]);  // dont read the inputs
     for (int i = 0; i < NB_neurones_C2; i++) close(pipe_out[i][0]); // dont write the outputs
 
+
+    for (int i = 0; i < N_samples; i++) {
+
     // read Monitor inputs
     double in[N_entree];
-    for (int i = 0; i < N_entree; i++){
-        read(pipe_in[i][0], &in[i], sizeof(double));
+        for (int j = 0; j < N_entree; j++){
+            read(pipe_in[j][0], &in[j], sizeof(double));
     }
 
     // process the columns
     double out_C1[NB_neurones_C1];
-    process_column(N_entree, NB_neurones_C1, jeux_test_lineaire[0], out_C1, coef_MAT1);
+        process_column(N_entree, NB_neurones_C1, in, out_C1, coef_MAT1);
     act_tanh(out_C1, NB_neurones_C1);
 
     double out_C2[NB_neurones_C2];
@@ -149,8 +160,9 @@ else {
     softmax(out_C2, out, NB_neurones_C2);
 
     // send outputs to Monitor
-    for (int i = 0; i < NB_neurones_C2; i++){
-        write(pipe_out[i][1], &out[i], sizeof(double));
+        for (int j = 0; j < NB_neurones_C2; j++){
+            write(pipe_out[j][1], &out[j], sizeof(double));
+        }
     }
 
     // close descriptors before terminate
