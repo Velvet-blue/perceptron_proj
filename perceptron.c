@@ -19,6 +19,7 @@
 
 
 /* Fonctions d'activation */
+void normalize(int n_samples, int n_inputs, double data[n_samples][n_inputs], double data_norm[n_samples][n_inputs]);
 void act_tanh(double x[], int nb);
 void softmax(const double in[], double out[], int nb);
 
@@ -101,6 +102,12 @@ pid_t pid = fork();
 
 if (pid != 0) {
     /* MONITOR */
+
+    /*
+    // normalize input
+    double normalized_input[N_samples][N_entree];
+    normalize(N_samples, N_entree, jeux_test_lineaire, normalized_input);
+    */
 
     // close unused ends
     for (int i = 0; i < N_entree; i++) close(pipe_in[i][0]);  // dont read the inputs
@@ -231,4 +238,54 @@ double dot_column(int n_in, int n_out, double in_aug[], double coefs[][n_out], i
         p += in_aug[i] * coefs[i][col_j];
     }
     return p;
+}
+
+
+void normalize(int n_samples, int n_inputs, double data[n_samples][n_inputs], double data_norm[n_samples][n_inputs]) {
+    
+    printf("data = \n");
+
+    for (int i = 0; i < n_samples; i++) {
+        for (int j = 0; j < n_inputs; j++) {
+            printf("%.15F   ", data[i][j]);
+        }
+        printf("\n");
+    }
+
+    printf("data_norm = \n");
+    
+    for (int i = 0; i < n_samples; i++) {
+        for (int j = 0; j < n_inputs; j++) {
+            printf("%.15F   ", data_norm[i][j]);
+        }
+        printf("\n");
+    }
+
+    printf(">>\n");
+    // for each input:
+    for (int j = 0; j < n_inputs; j++) {
+
+        // find data maximum value
+        double max = data[0][j];
+        double min = data[0][j];
+        for (int i = 0; i < n_samples; i++) {
+            if (max < data[i][j]) max = data[i][j];
+            if (min > data[i][j]) min = data[i][j];
+        }
+        printf("max = %.15F\n", max);
+        printf("min = %.15F\n", min);
+
+        // change the scale range
+        const double range = max - min;
+        printf("range = %.15F\n", range);
+        for (int i = 0; i < n_samples; i++) {
+            data_norm[i][j] = (range == 0) ? 0.0 : 2 * (data[i][j] - min) / range - 1;
+        }
+    }
+    for (int i = 0; i < n_samples; i++) {
+        for (int j = 0; j < n_inputs; j++) {
+            printf("%.15F   ", data_norm[i][j]);
+        }
+        printf("\n");
+    }
 }
