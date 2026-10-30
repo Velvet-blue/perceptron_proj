@@ -6,6 +6,12 @@
 #include <sys/types.h> // pid_t
 #include <sys/wait.h>
 
+volatile sig_atomic_t start_reading = 0;
+void handle_sigusr1(int sig) {
+    (void)sig; // Évite les warnings "unused parameter"
+    start_reading = 1;
+}
+
 /* ========================================================================= */
 /*              NETWORK ARCHITECTURE                                         */
 /* ========================================================================= */
@@ -282,9 +288,18 @@ void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
     normalize(NB_SAMPLES, INPUT_DIM, linear_sample_vector, normalized_input);
     */
 
+
     // close pipes : the process only writes
     for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]); // Application
     close(pipe_ref[0]); // analyser
+
+    // initialize signal
+    signal(SIGUSR1, handle_sigusr1);
+
+    // wait the signal for it starts
+    while (!start_reading) {
+        pause();
+    }
 
     // write inputs for Application
     for (int i = 0; i < NB_SAMPLES; i++) {
@@ -393,6 +408,13 @@ void run_monitor(pid_t pid_reader, int pipe_synth[2]) {
 
     // close unused ends
     close(pipe_synth[1]);
+
+    // Attendre un court instant ou laisser les fils s'initialiser
+    usleep(1000); // 1 ms
+    // Envoyer le signal SIGUSR1 au Lecteur pour déclencher l'exécution
+    if (kill(pid_reader, SIGUSR1) < 0) {
+        perror("Erreur lors de l'envoi de SIGUSR1 au Lecteur");
+    }
 
     // read the righ result percentage
     int percent_right_results;
