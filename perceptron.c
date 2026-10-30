@@ -7,48 +7,58 @@
 #include <sys/wait.h>
 
 /* ========================================================================= */
-/* NETWORK ARCHITECTURE                                                    */
+/*              NETWORK ARCHITECTURE                                         */
 /* ========================================================================= */
 
 #define INPUT_DIM	4
 #define C1_COLUMN_SIZE 3
-#define C2_COLUMN_SIZE 3	/* egal au nombre de sorties */
+#define C2_COLUMN_SIZE 3	/* equals the number of outputs*/
 
 #define NB_SAMPLES 15
 
 /* ========================================================================= */
-/* PRÉ-TRAITEMENT ET FONCTIONS D'ACTIVATION                                 */
+/*              PRE-TREATMENT AND ACTIVATION FUNCTIONS                       */
 /* ========================================================================= */
 
-/* Pré-traitement : Normalisation Min-Max [-1, 1] des données d'entrée */
+/* Pre-treatment : Normalization Min-Max [-1, 1] of the input data */
 void normalize(int n_samples, int input_size, double data[n_samples][input_size], double data_norm[n_samples][input_size]);
 
 
-/* Fonctions d'activation */
+/* Activation Functions */
 void act_tanh(double x[], int len);
 void softmax(const double in[], double out[], int len);
 
 
 /* ========================================================================= */
-/* CALCULS NEURONAUX                                                         */
+/*              NEURAL COMPUTATIONS                                          */
 /* ========================================================================= */
 
-/* Produit scalaire entre l'entrée augmentée (avec bias) et la j-ième colonne de poids */
+/* Scalar Product between the augmented input (with bias) and the j-th column of weights */
 double dot_column(int n_in, int n_out,
     double in_aug[], double coefs[][n_out],
     int neuron_idx);
 
-/* Propagation avant pour une couche complète (ponderated sum with bias) */
+/* Forward propagation for a complete layer (weighted sum with bias) */
 void process_column(int n_in, int n_out,
     double in[], double out[],
     double coefs[][n_out]);
 
+/* ========================================================================= */
+/*              PROGRAM FUNCTIONS                                            */
+/* ========================================================================= */
 
-int main(int argc, char **argv)
-{
-	
-/* vecteurs de test linearises */
-double jeux_test_lineaire[NB_SAMPLES][4] = {
+void run_monitor(pid_t pid_reader, int pipe_synth[2]);
+void run_reader(int pipe_in[4][2], int pipe_ref[2]);
+void run_application(int pipe_in[4][2], int pipe_out[3][2]);
+void run_analyser(int pipe_out[3][2], int pipe_ref[2], int pipe_synth[2]);
+
+
+/* ========================================================================= */
+/*              MAIN                                                         */
+/* ========================================================================= */
+
+/* sample linear test vector */
+double linear_sample_vector[NB_SAMPLES][4] = {
 {-0.613472, 0.192301, -4.148675, -0.758351},
 {-0.778532, -0.024905, -4.148675, -0.758351},
 {-0.943593, 0.061977, -4.324615, -0.758351},
@@ -65,14 +75,14 @@ double jeux_test_lineaire[NB_SAMPLES][4] = {
 {0.376891, -0.068346, 3.240822, 0.455824},
 {0.541951, -0.024905, 3.592703, 0.759367}};
 
-/* Sories attendues pour les NB_SAMPLES vecteurs de test */
-int sortie_attendue[NB_SAMPLES] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2};
+/* Expected outputs for the N_SAMPLES test vectors */
+int ref_values[NB_SAMPLES] = {0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2};
 		
-/* Jeu de coefficients pour un réseau 4 entrées, 3 neurones couche1 */
-/* 3 neurones couches 2 et 3 sorties */		
-/* Les elements [INPUT_DIM][] de coef_MAT1 contiennent les biais*/
-/* Les elements [C1_COLUMN_SIZE][] de coef_MAT2 contiennent les biais*/
-/* 13 sur 15 résultats (87%) correct avec cet ensemble de coefficients */
+/* Set of coefficients for a network with 4 inputs and 3 neurons in the first layer */
+/* 3 neurons in the second layer and 3 outputs */
+/* The [INPUT_DIM][] elements of coef_MAT1 contain the biases */
+/* The [C1_COLUMN_SIZE][] elements of coef_MAT2 contain the biases */
+/* 13 out of 15 results (87%) are correct with this set of coefficients */
 double coef_MAT1[INPUT_DIM + 1][C1_COLUMN_SIZE] = 
 			{{ +1.70, +2.58, -1.87}, 
 			{+1.56, +4.04, -5.81}, 
@@ -87,13 +97,20 @@ double coef_MAT2[C1_COLUMN_SIZE + 1][C2_COLUMN_SIZE] =
 			{-3.30, +1.42, -1.22 }}; // ---> bias
 
 
-/*      MAIN PROGRAM        */
 
+int main(int argc, char **argv)
+{
+	
+
+
+/*      MAIN PROGRAM        */
 
 // creation of the pipes
 
-int pipe_in[INPUT_DIM][2];
-int pipe_out[C2_COLUMN_SIZE][2];
+int pipe_in[INPUT_DIM][2];          // reader  <-> Applicat
+int pipe_out[C2_COLUMN_SIZE][2];    // Applicat <-> Analyser
+int pipe_ref[2];                    // reader  <-> analyser
+int pipe_synth[2];                  // monitor <-> analyser
 
 for (int i = 0; i < INPUT_DIM; i++) {
     if (pipe(pipe_in[i]) < 0) {
@@ -109,111 +126,78 @@ for (int i = 0; i < C2_COLUMN_SIZE; i++) {
     }
 }
 
-// FORKING
-pid_t pid = fork();
+if (pipe(pipe_ref) < 0) {
+    perror("Fail when creatin pipe_ref");
+    exit(EXIT_FAILURE);
+}
 
-if (pid != 0) {
-    /* MONITOR */
+if (pipe(pipe_synth) < 0) {
+    perror("Fail when creatin pipe_synth");
+    exit(EXIT_FAILURE);
+}
 
-    /*
-    // normalize input
-    double normalized_input[N_samples][INPUT_DIM];
-    normalize(N_samples, INPUT_DIM, jeux_test_lineaire, normalized_input);
-    */
 
-    // close unused ends
-    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]);  // dont read the inputs
-    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][1]); // dont write the outputs
+// Creation of child processes
 
-    // write inputs
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
-            write(pipe_in[j][1], &jeux_test_lineaire[i][j], sizeof(double));
-        }
-    }
+pid_t pid, pid_reader, pid_app, pid_analyser;
 
-    // read Application outputs
-    double out[NB_SAMPLES][C2_COLUMN_SIZE];
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
-            read(pipe_out[j][0], &out[i][j], sizeof(double));
-        }
-    }
-    
-    // print outputs
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        printf("saída:\n[");
-        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
-            printf("%.4F\t", out[i][j]);
-        }
-        printf("]\n");
-    }
+pid_reader = fork();
+if (pid_reader == 0) {
+    printf("[reader]\t fork\n");
+    run_reader(pipe_in, pipe_ref);
+    printf("[reader]\t end\n");
+    _exit(EXIT_SUCCESS);
+}
 
+pid_app = fork();
+if (pid_app == 0) {
+    printf("[applycat]\t fork\n");
+    run_application(pipe_in, pipe_out);
+    printf("[applycat]\t end\n");
+    _exit(EXIT_SUCCESS);
+}
+
+pid_analyser = fork();
+if (pid_analyser == 0) {
+    printf("[analys]\t fork\n");
+    run_analyser(pipe_out, pipe_ref, pipe_synth);
+    printf("[analys]\t end\n");
+    _exit(EXIT_SUCCESS);
+}
+
+// 3. Executes the main routine
+run_monitor(pid_reader, pipe_synth);
+printf("[monitor]\t end\n");
+
+// 4. Wait the 3 processes
+for (int i = 0; i < 3; i++) {
     wait(NULL);
 }
 
-else {
-    /* APPLICATION */
-    
-    // close unused ends
-    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][1]);  // dont read the inputs
-    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]); // dont write the outputs
 
 
-    for (int i = 0; i < NB_SAMPLES; i++) {
-
-        // read Monitor inputs
-        double in[INPUT_DIM];
-        for (int j = 0; j < INPUT_DIM; j++){
-            read(pipe_in[j][0], &in[j], sizeof(double));
-        }
-
-        // process the columns
-        double out_C1[C1_COLUMN_SIZE];
-        process_column(INPUT_DIM, C1_COLUMN_SIZE, in, out_C1, coef_MAT1);
-        act_tanh(out_C1, C1_COLUMN_SIZE);
-
-        double out_C2[C2_COLUMN_SIZE];
-        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, out_C1, out_C2, coef_MAT2);
-
-        double out[C2_COLUMN_SIZE];
-        softmax(out_C2, out, C2_COLUMN_SIZE);
-
-        // send outputs to Monitor
-        for (int j = 0; j < C2_COLUMN_SIZE; j++){
-            write(pipe_out[j][1], &out[j], sizeof(double));
-        }
-    }
-
-    // close descriptors before terminate
-    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]);
-    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][1]);
-    _exit(0);
-}
-
-	return 0;
+return 0;
 }
 
 
 /*/////////////////////////////////////////////////////////////////////////*/
 	   
-/*  nb est la taille des vecteurs d'entree et de sortie - in et out */
 void softmax(const double in[], double out[], int len) {
-    /* Trouver la valeur max pour la stabilité numérique */
+    /* Find the maximum value for numerical stability */
     double max_softmax = in[0];
     for (int l = 1; l < len; l++) {
         if (in[l] > max_softmax)
 				max_softmax = in[l];
     }
 
-    /* Calculer exp(x - max) */
+    /* Calculates exp(x - max) */
     double somme = 0.0;
     for (int l = 0; l < len; l++) {
         out[l] = exp(in[l] - max_softmax);
         somme += out[l];
     }
 
-    /* Normaliser */
+    /* Normalize */
     for (int l = 0; l < len; l++) {
         out[l] /= somme;
     }
@@ -286,4 +270,138 @@ void normalize(int n_samples, int input_size, double data[n_samples][input_size]
         for (int j = 0; j < input_size; j++) {
         }
     }
+}
+
+
+void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
+    /* reader */
+
+    /*
+    // normalize input
+    double normalized_input[NB_SAMPLES][INPUT_DIM];
+    normalize(NB_SAMPLES, INPUT_DIM, linear_sample_vector, normalized_input);
+    */
+
+    // close pipes : the process only writes
+    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]); // Application
+    close(pipe_ref[0]); // analyser
+
+    // write inputs for Application
+    for (int i = 0; i < NB_SAMPLES; i++) {
+        for (int j = 0; j < INPUT_DIM; j++) {
+            write(pipe_in[j][1], &linear_sample_vector[i][j], sizeof(double));
+        }
+    }
+
+    // write reference values for analyser
+    for (int i = 0; i < NB_SAMPLES; i++) {
+        write(pipe_ref[1], &ref_values[i], sizeof(int));
+    }
+}
+
+
+void run_application(int pipe_in[4][2], int pipe_out[3][2]) {
+    /* APPLICATION */
+    
+    // close unused ends
+    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][1]);  // only read the inputs
+    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]); // only write the outputs
+
+    // iterate through the samples
+    for (int i = 0; i < NB_SAMPLES; i++) {
+
+        // read the inputs
+        double in[INPUT_DIM];
+        for (int j = 0; j < INPUT_DIM; j++){
+            read(pipe_in[j][0], &in[j], sizeof(double));
+        }
+
+        // process the columns
+        double out_C1[C1_COLUMN_SIZE];
+        process_column(INPUT_DIM, C1_COLUMN_SIZE, in, out_C1, coef_MAT1);
+        act_tanh(out_C1, C1_COLUMN_SIZE);
+
+        double out_C2[C2_COLUMN_SIZE];
+        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, out_C1, out_C2, coef_MAT2);
+
+        double out[C2_COLUMN_SIZE];
+        softmax(out_C2, out, C2_COLUMN_SIZE);
+
+        // send outputs
+        for (int j = 0; j < C2_COLUMN_SIZE; j++){
+            write(pipe_out[j][1], &out[j], sizeof(double));
+        }
+    }
+
+    // close descriptors before terminate
+    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]);
+    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][1]);
+}
+
+
+void run_analyser(int pipe_out[3][2], int pipe_ref[2], int pipe_synth[2]) {
+
+    // close unused ends
+    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][1]); // only read the outputs
+    close(pipe_ref[1]);   // only read the ref values
+    close(pipe_synth[0]); // only write the results
+
+    int ref_value = 0;
+    int n_right_results = 0;
+    double out_sample[C2_COLUMN_SIZE];
+    for (int i = 0; i < NB_SAMPLES; i++){
+
+        // read one ref value
+        read(pipe_ref[0], &ref_value, sizeof(int));
+
+        // read one output sample vector
+        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
+            read(pipe_out[j][0], &out_sample[j], sizeof(double));
+        }
+
+        // perform argmax classification
+        double out_max_value = out_sample[0];
+        int out_max_idx = 0;
+        for (int j = 1; j < C2_COLUMN_SIZE; j++) {
+            if (out_max_value < out_sample[j]) {
+                out_max_value = out_sample[j];
+                out_max_idx = j;
+            }
+        }
+
+        // increment the right predictions counter
+        if (out_max_idx == ref_value) {
+            n_right_results++;
+        }
+
+    }
+
+    // send accuracy percentage scaled by 100 as a rounded int (ex: 8667 means 86.67%)
+    // note: +0.5 for each sample for round, not trunc (NB_SAMPLES/2)
+    int percent_right_results = (10000 * n_right_results + NB_SAMPLES/2) / NB_SAMPLES;
+    write(pipe_synth[1], &percent_right_results, sizeof(int));
+
+    // close descriptors before terminate
+    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]);
+    close(pipe_ref[0]);
+    close(pipe_synth[1]);
+}
+
+
+
+void run_monitor(pid_t pid_reader, int pipe_synth[2]) {
+
+    // close unused ends
+    close(pipe_synth[1]);
+
+    // read the righ result percentage
+    int percent_right_results;
+    read(pipe_synth[0], &percent_right_results, sizeof(int));
+
+    // print the result
+    printf("percentage of right results = %.2f %%\n", (float) percent_right_results/100 );
+
+    // close descriptors before terminate
+    close(pipe_synth[0]);
+
 }
