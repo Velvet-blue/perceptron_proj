@@ -23,6 +23,8 @@
 /*  IPC RESOURCE DEFINITIONS & NETWORK TOPOLOGY                              */
 /* ========================================================================= */
 
+#define DATA_FILE_PATH "data_Iris.csv"
+
 #define SHM_NAME "/shm_perceptron"
 #define SEM_NAME "/sem_perceptron"
 
@@ -114,7 +116,7 @@ double coef_MAT1[INPUT_DIM + 1][C1_COLUMN_SIZE] =
 			{+1.56, +4.04, -5.81}, 
 			{-2.68, -3.84, +4.21}, 
 			{-0.02, -6.49, +6.97}, 
-			{-1.00, +5.00, -5.00}}; // ---> bias
+			{-4.07, +7.31, -8.16}}; // ---> bias
 			
 double coef_MAT2[C1_COLUMN_SIZE + 1][C2_COLUMN_SIZE] = 
 			{{ +9.00, -10.75, -1.38},
@@ -292,7 +294,7 @@ void normalize(int n_samples, int input_size, double data[n_samples][input_size]
 }
 
 
-void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
+void run_reader(int pipe_in[INPUT_DIM][2], int pipe_ref[2]) {
     /* reader */
 
     /*
@@ -314,17 +316,41 @@ void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
         pause();
     }
 
-    // write inputs for Application
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
-            write(pipe_in[j][1], &linear_sample_vector[i][j], sizeof(double));
-        }
+    // open the data file
+    FILE *file = fopen(DATA_FILE_PATH, "r");
+    if (file == NULL) {
+        printf("Error when opening the file '%s'\n", DATA_FILE_PATH);
+        exit(EXIT_FAILURE);
     }
 
-    // write reference values for analyser
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        write(pipe_ref[1], &ref_values[i], sizeof(int));
+    double sample[INPUT_DIM];
+    int ref_val;
+    int count = 0;
+
+    // read the data line by line
+    while (count < NB_SAMPLES && 
+      fscanf(file, "%lf;%lf;%lf;%lf;%d", 
+      &sample[0], &sample[1], &sample[2], &sample[3], &ref_val) == 5) {
+        
+        // send the 4 inputs to Couche 1 through the pipes
+        for (int j = 0; j < INPUT_DIM; j++) {
+            write(pipe_in[j][1], &sample[j], sizeof(double));
+        }
+
+        // send the reference values to the Analyser
+        write(pipe_ref[1], &ref_val, sizeof(int));
+
+        count++;
     }
+
+    fclose(file);
+
+
+    // close descriptors before terminate
+    for (int i = 0; i < INPUT_DIM; i++) {
+        close(pipe_in[i][1]);
+    }
+    close(pipe_ref[1]);
 }
 
 
