@@ -1,43 +1,61 @@
+/* ========================================================================= */
+/*  PROJECT: Multi-Process Neural Network Inference Engine (POSIX / C18)     */
+/*  ARCH: 5-Process Topology using Pipes, Shared Memory & Named Semaphores   */
+/* ========================================================================= */
+
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
 
-#include <unistd.h>  // pipe(), fork(), close(), read(), write(), _exit()
-#include <sys/types.h> // pid_t
-#include <sys/wait.h>
+#include <unistd.h>     // pipe(), fork(), close(), read(), write(), _exit(), pause()
+#include <sys/types.h>  // pid_t
+#include <sys/wait.h>   // wait(), waitpid()
 
-volatile sig_atomic_t start_reading = 0;
+#include <sys/mman.h>   // shm_open(), mmap(), munmap(), shm_unlink()
+#include <sys/stat.h>   // For mode constants (S_IRUSR, S_IWUSR, etc.)
+#include <fcntl.h>      // O_CREAT, O_RDWR, O_EXCL
+#include <semaphore.h>  // sem_open(), sem_wait(), sem_post(), sem_close(), sem_unlink()
+#include <signal.h>     // sigaction, sig_atomic_t, SIGUSR1
+
+/* ========================================================================= */
+/*  IPC RESOURCE DEFINITIONS & NETWORK TOPOLOGY                              */
+/* ========================================================================= */
+
+#define SHM_NAME "/shm_perceptron"
+#define SEM_NAME "/sem_perceptron"
+
+#define INPUT_DIM       4   /* Feature vector dimension (e.g., Iris dataset) */
+#define C1_COLUMN_SIZE  3   /* Number of neurons in Layer 1                  */
+#define C2_COLUMN_SIZE  3   /* Number of neurons in Layer 2 / Output classes */
+#define NB_SAMPLES     15   /* Total number of evaluation samples            */
+
+/* Shared Memory layout used for Inter-Process Communication between Layer 1 & 2 */
+typedef struct {
+    double data[NB_SAMPLES][C1_COLUMN_SIZE];
+} SharedBuffer;
+
+/* Asynchronous signal state indicator for process start synchronization */
+static volatile sig_atomic_t start_reading = 0;
 void handle_sigusr1(int sig) {
     (void)sig; // Évite les warnings "unused parameter"
     start_reading = 1;
 }
 
-/* ========================================================================= */
-/*              NETWORK ARCHITECTURE                                         */
-/* ========================================================================= */
-
-#define INPUT_DIM	4
-#define C1_COLUMN_SIZE 3
-#define C2_COLUMN_SIZE 3	/* equals the number of outputs*/
-
-#define NB_SAMPLES 15
 
 /* ========================================================================= */
-/*              PRE-TREATMENT AND ACTIVATION FUNCTIONS                       */
+/*  MATHEMATICAL & ACTIVATION PRIMITIVES                                     */
 /* ========================================================================= */
 
 /* Pre-treatment : Normalization Min-Max [-1, 1] of the input data */
-void normalize(int n_samples, int input_size, double data[n_samples][input_size], double data_norm[n_samples][input_size]);
-
+void normalize(
+    int n_samples, int input_size,
+    double data[n_samples][input_size],
+    double data_norm[n_samples][input_size]);
 
 /* Activation Functions */
 void act_tanh(double x[], int len);
 void softmax(const double in[], double out[], int len);
-
-
-/* ========================================================================= */
-/*              NEURAL COMPUTATIONS                                          */
-/* ========================================================================= */
 
 /* Scalar Product between the augmented input (with bias) and the j-th column of weights */
 double dot_column(int n_in, int n_out,
@@ -50,13 +68,14 @@ void process_column(int n_in, int n_out,
     double coefs[][n_out]);
 
 /* ========================================================================= */
-/*              PROGRAM FUNCTIONS                                            */
+/*  PROCESS ROUTINES                                                         */
 /* ========================================================================= */
 
 void run_monitor(pid_t pid_reader, int pipe_synth[2]);
 void run_reader(int pipe_in[4][2], int pipe_ref[2]);
-void run_application(int pipe_in[4][2], int pipe_out[3][2]);
 void run_analyser(int pipe_out[3][2], int pipe_ref[2], int pipe_synth[2]);
+void run_couche1(int pipe_in[4][2], SharedBuffer *shm, sem_t *sem);
+void run_couche2(int pipe_out[3][2], SharedBuffer *shm, sem_t *sem);
 
 
 /* ========================================================================= */
@@ -143,44 +162,37 @@ if (pipe(pipe_synth) < 0) {
 }
 
 
-// Creation of child processes
+// create shared memory
+int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+ftruncate(shm_fd, sizeof(SharedBuffer));
+SharedBuffer *shm = mmap(NULL, sizeof(SharedBuffer), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
 
-pid_t pid, pid_reader, pid_app, pid_analyser;
+// create named semaphore (beggins at 0)
+sem_unlink(SEM_NAME); // clears previous residues
+sem_t *sem = sem_open(SEM_NAME, O_CREAT, 0666, 0);
 
-pid_reader = fork();
-if (pid_reader == 0) {
-    printf("[reader]\t fork\n");
-    run_reader(pipe_in, pipe_ref);
-    printf("[reader]\t end\n");
-    _exit(EXIT_SUCCESS);
-}
+// fork the 4 child processes (reader, couche1, couche2, analyser)
+pid_t pid_reader = fork();
+if (pid_reader == 0) { run_reader(pipe_in, pipe_ref); _exit(0); }
 
-pid_app = fork();
-if (pid_app == 0) {
-    printf("[applycat]\t fork\n");
-    run_application(pipe_in, pipe_out);
-    printf("[applycat]\t end\n");
-    _exit(EXIT_SUCCESS);
-}
+pid_t pid_c1 = fork();
+if (pid_c1 == 0) { run_couche1(pipe_in, shm, sem); _exit(0); }
 
-pid_analyser = fork();
-if (pid_analyser == 0) {
-    printf("[analys]\t fork\n");
-    run_analyser(pipe_out, pipe_ref, pipe_synth);
-    printf("[analys]\t end\n");
-    _exit(EXIT_SUCCESS);
-}
+pid_t pid_c2 = fork();
+if (pid_c2 == 0) { run_couche2(pipe_out, shm, sem); _exit(0); }
 
-// 3. Executes the main routine
+pid_t pid_analyser = fork();
+if (pid_analyser == 0) { run_analyser(pipe_out, pipe_ref, pipe_synth); _exit(0); }
+
+// executes the monitor process and wait the 4 childs to finish execution
 run_monitor(pid_reader, pipe_synth);
-printf("[monitor]\t end\n");
+for (int i = 0; i < 4; i++) wait(NULL);
 
-// 4. Wait the 3 processes
-for (int i = 0; i < 3; i++) {
-    wait(NULL);
-}
-
-
+// clear memory and POSIX resources
+munmap(shm, sizeof(SharedBuffer));
+shm_unlink(SHM_NAME);
+sem_close(sem);
+sem_unlink(SEM_NAME);
 
 return 0;
 }
@@ -315,42 +327,56 @@ void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
 }
 
 
-void run_application(int pipe_in[4][2], int pipe_out[3][2]) {
-    /* APPLICATION */
+void run_couche1(int pipe_in[4][2], SharedBuffer *shm, sem_t *sem) {
     
     // close unused ends
-    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][1]);  // only read the inputs
-    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]); // only write the outputs
+    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][1]);
 
-    // iterate through the samples
     for (int i = 0; i < NB_SAMPLES; i++) {
-
-        // read the inputs
         double in[INPUT_DIM];
-        for (int j = 0; j < INPUT_DIM; j++){
+        for (int j = 0; j < INPUT_DIM; j++) {
             read(pipe_in[j][0], &in[j], sizeof(double));
         }
 
-        // process the columns
         double out_C1[C1_COLUMN_SIZE];
         process_column(INPUT_DIM, C1_COLUMN_SIZE, in, out_C1, coef_MAT1);
         act_tanh(out_C1, C1_COLUMN_SIZE);
 
-        double out_C2[C2_COLUMN_SIZE];
-        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, out_C1, out_C2, coef_MAT2);
-
-        double out[C2_COLUMN_SIZE];
-        softmax(out_C2, out, C2_COLUMN_SIZE);
-
-        // send outputs
-        for (int j = 0; j < C2_COLUMN_SIZE; j++){
-            write(pipe_out[j][1], &out[j], sizeof(double));
+        // store the output in the shared memory buffer
+        for (int j = 0; j < C1_COLUMN_SIZE; j++) {
+            shm->data[i][j] = out_C1[j];
         }
     }
 
-    // close descriptors before terminate
-    for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]);
-    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][1]);
+    // enable the semaphore to the Couche 2 after writing all the samples
+    sem_post(sem);
+}
+
+
+void run_couche2(int pipe_out[3][2], SharedBuffer *shm, sem_t *sem) {
+    
+    // close unused ends
+    for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]);
+
+    // wait Couche 1 finish the process 
+    sem_wait(sem);
+
+    for (int i = 0; i < NB_SAMPLES; i++) {
+        double in[C1_COLUMN_SIZE];
+        for (int j = 0; j < C1_COLUMN_SIZE; j++) {
+            in[j] = shm->data[i][j];
+        }
+
+        double out_C2[C2_COLUMN_SIZE];
+        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, in, out_C2, coef_MAT2);
+        
+        double out[C2_COLUMN_SIZE];
+        softmax(out_C2, out, C2_COLUMN_SIZE);
+
+        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
+            write(pipe_out[j][1], &out[j], sizeof(double));
+        }
+    }
 }
 
 
