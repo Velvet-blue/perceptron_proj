@@ -1,6 +1,7 @@
 /* ========================================================================= */
 /*  PROJECT: Multi-Process Neural Network Inference Engine (POSIX / C18)     */
 /*  ARCH: 5-Process Topology using Pipes, Shared Memory & Named Semaphores   */
+/*  GitHub link : https://github.com/Velvet-blue/perceptron_proj             */
 /* ========================================================================= */
 
 
