@@ -44,7 +44,8 @@ double coef_MAT2[C1_COLUMN_SIZE + 1][C2_COLUMN_SIZE] =
 
 int main(int argc, char **argv)
 {
-	
+    (void)argc; // Suppress unused parameter warning
+    (void)argv; // Suppress unused parameter warning
 
 
 /*      MAIN PROGRAM        */
