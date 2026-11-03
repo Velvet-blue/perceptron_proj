@@ -1,6 +1,15 @@
 
 #include "perceptron.h"
 
+
+volatile sig_atomic_t start_reading = 0;
+
+void handle_sigusr1(int sig) {
+    (void)sig; // Suprime o aviso de parâmetro não utilizado
+    start_reading = 1;
+}
+
+
 /* sample linear test vector */
 double linear_sample_vector[NB_SAMPLES][4] = {
 {-0.613472, 0.192301, -4.148675, -0.758351},
@@ -32,7 +41,7 @@ double coef_MAT1[INPUT_DIM + 1][C1_COLUMN_SIZE] =
 			{+1.56, +4.04, -5.81}, 
 			{-2.68, -3.84, +4.21}, 
 			{-0.02, -6.49, +6.97}, 
-			{-1.00, +5.00, -5.00}}; // ---> bias
+			{-4.07, +7.31, -8.16}}; // ---> bias
 			
 double coef_MAT2[C1_COLUMN_SIZE + 1][C2_COLUMN_SIZE] = 
 			{{ +9.00, -10.75, -1.38},
@@ -49,6 +58,30 @@ int main(int argc, char **argv)
 
 
 /*      MAIN PROGRAM        */
+
+// clean previous IPC resources
+shm_unlink(SHM_NAME);
+sem_unlink(SEM_NAME);
+
+/* creates shared memory for the coeffs*/
+int shm_fd = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+if (shm_fd < 0) {
+    perror("Erro ao criar memória compartilhada shm_open");
+    exit(EXIT_FAILURE);
+}
+ftruncate(shm_fd, sizeof(WeightsBuffer));
+WeightsBuffer *shm_weights = mmap(NULL, sizeof(WeightsBuffer), PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+if (shm_weights == MAP_FAILED) {
+    perror("Erro ao mapear mmap");
+    exit(EXIT_FAILURE);
+}
+
+/* creates the semaphore */
+sem_t *sem = sem_open(SEM_NAME, O_CREAT, 0666, 0);
+if (sem == SEM_FAILED) {
+    perror("Erro ao criar semáforo sem_open");
+    exit(EXIT_FAILURE);
+}
 
 // creation of the pipes
 
@@ -104,15 +137,21 @@ if (pid_analyser == 0) {
     _exit(EXIT_SUCCESS);
 }
 
-// 3. Executes the main routine
-run_monitor(pid_reader, pipe_synth);
+// Executes the main routine
+run_monitor(pid_reader, pipe_synth, shm_weights, sem);
 
-// 4. Wait the 3 processes
+// Wait the 3 processes
 for (int i = 0; i < 3; i++) {
     wait(NULL);
 }
 
+// unlock and destroy IPC resources
+munmap(shm_weights, sizeof(WeightsBuffer));
+close(shm_fd);
+shm_unlink(SHM_NAME);
 
+sem_close(sem);
+sem_unlink(SEM_NAME);
 
 return 0;
 }
@@ -270,12 +309,49 @@ void run_reader(int pipe_in[INPUT_DIM][2], int pipe_ref[2]) {
 }
 
 
-void run_application(int pipe_in[4][2], int pipe_out[3][2]) {
+void run_application(int pipe_in[INPUT_DIM][2], int pipe_out[C2_COLUMN_SIZE][2]) {
     /* APPLICATION */
     
     // close unused ends
     for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][1]);  // only read the inputs
     for (int i = 0; i < C2_COLUMN_SIZE; i++) close(pipe_out[i][0]); // only write the outputs
+
+
+    // open the shared memory and semaphore
+    int shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
+    if (shm_fd < 0) {
+        perror("Application: shm_open falhou");
+        exit(EXIT_FAILURE);
+    }
+    WeightsBuffer *shm_weights = mmap(NULL, sizeof(WeightsBuffer), PROT_READ, MAP_SHARED, shm_fd, 0);
+    if (shm_weights == MAP_FAILED) {
+        perror("Application: mmap falhou");
+        exit(EXIT_FAILURE);
+    }
+
+    sem_t *sem = sem_open(SEM_NAME, 0);
+    if (sem == SEM_FAILED) {
+        perror("Application: sem_open falhou");
+        exit(EXIT_FAILURE);
+    }
+
+    // wait the enable by the Monitor
+    sem_wait(sem);
+
+    // copies the coeffs in the shared memory
+    double local_coef_MAT1[INPUT_DIM + 1][C1_COLUMN_SIZE];
+    double local_coef_MAT2[C1_COLUMN_SIZE + 1][C2_COLUMN_SIZE];
+
+    for (int i = 0; i <= INPUT_DIM; i++) {
+        for (int j = 0; j < C1_COLUMN_SIZE; j++) {
+            local_coef_MAT1[i][j] = shm_weights->coef_MAT1[i][j];
+        }
+    }
+    for (int i = 0; i <= C1_COLUMN_SIZE; i++) {
+        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
+            local_coef_MAT2[i][j] = shm_weights->coef_MAT2[i][j];
+        }
+    }
 
     // iterate through the samples
     for (int i = 0; i < NB_SAMPLES; i++) {
@@ -288,11 +364,11 @@ void run_application(int pipe_in[4][2], int pipe_out[3][2]) {
 
         // process the columns
         double out_C1[C1_COLUMN_SIZE];
-        process_column(INPUT_DIM, C1_COLUMN_SIZE, in, out_C1, coef_MAT1);
+        process_column(INPUT_DIM, C1_COLUMN_SIZE, in, out_C1, local_coef_MAT1);
         act_tanh(out_C1, C1_COLUMN_SIZE);
 
         double out_C2[C2_COLUMN_SIZE];
-        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, out_C1, out_C2, coef_MAT2);
+        process_column(C1_COLUMN_SIZE, C2_COLUMN_SIZE, out_C1, out_C2, local_coef_MAT2);
 
         double out[C2_COLUMN_SIZE];
         softmax(out_C2, out, C2_COLUMN_SIZE);
@@ -302,6 +378,11 @@ void run_application(int pipe_in[4][2], int pipe_out[3][2]) {
             write(pipe_out[j][1], &out[j], sizeof(double));
         }
     }
+    
+    // unmap local resources
+    munmap(shm_weights, sizeof(WeightsBuffer));
+    close(shm_fd);
+    sem_close(sem);
 
     // close descriptors before terminate
     for (int i = 0; i < INPUT_DIM; i++) close(pipe_in[i][0]);
@@ -346,9 +427,8 @@ void run_analyser(int pipe_out[3][2], int pipe_ref[2], int pipe_synth[2]) {
 
     }
 
-    // send accuracy percentage scaled by 100 as a rounded int (ex: 8667 means 86.67%)
     // note: +0.5 for each sample for round, not trunc (NB_SAMPLES/2)
-    int percent_right_results = (10000 * n_right_results + NB_SAMPLES/2) / NB_SAMPLES;
+    int percent_right_results = (100000 * n_right_results + NB_SAMPLES/2) / NB_SAMPLES;
     write(pipe_synth[1], &percent_right_results, sizeof(int));
 
     // close descriptors before terminate
@@ -359,10 +439,24 @@ void run_analyser(int pipe_out[3][2], int pipe_ref[2], int pipe_synth[2]) {
 
 
 
-void run_monitor(pid_t pid_reader, int pipe_synth[2]) {
+void run_monitor(pid_t pid_reader, int pipe_synth[2], WeightsBuffer *shm_weights, sem_t *sem) {
 
     // close unused ends
     close(pipe_synth[1]);
+
+    // writes the coeffs in the shared memory
+    for (int i = 0; i <= INPUT_DIM; i++) {
+        for (int j = 0; j < C1_COLUMN_SIZE; j++) {
+            shm_weights->coef_MAT1[i][j] = coef_MAT1[i][j];
+        }
+    }
+    for (int i = 0; i <= C1_COLUMN_SIZE; i++) {
+        for (int j = 0; j < C2_COLUMN_SIZE; j++) {
+            shm_weights->coef_MAT2[i][j] = coef_MAT2[i][j];
+        }
+    }
+
+    sem_post(sem);
 
     // Attendre un court instant ou laisser les fils s'initialiser
     usleep(1000); // 1 ms
@@ -376,7 +470,7 @@ void run_monitor(pid_t pid_reader, int pipe_synth[2]) {
     read(pipe_synth[0], &percent_right_results, sizeof(int));
 
     // print the result
-    printf("percentage of right results = %.2f %%\n", (float) percent_right_results/100 );
+    printf("percentage of right results = %.3f %%\n", (float) percent_right_results/1000 );
 
     // close descriptors before terminate
     close(pipe_synth[0]);
