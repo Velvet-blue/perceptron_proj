@@ -84,35 +84,28 @@ if (pipe(pipe_synth) < 0) {
 
 // Creation of child processes
 
-pid_t pid, pid_reader, pid_app, pid_analyser;
+pid_t pid_reader, pid_app, pid_analyser;
 
 pid_reader = fork();
 if (pid_reader == 0) {
-    printf("[reader]\t fork\n");
     run_reader(pipe_in, pipe_ref);
-    printf("[reader]\t end\n");
     _exit(EXIT_SUCCESS);
 }
 
 pid_app = fork();
 if (pid_app == 0) {
-    printf("[applycat]\t fork\n");
     run_application(pipe_in, pipe_out);
-    printf("[applycat]\t end\n");
     _exit(EXIT_SUCCESS);
 }
 
 pid_analyser = fork();
 if (pid_analyser == 0) {
-    printf("[analys]\t fork\n");
     run_analyser(pipe_out, pipe_ref, pipe_synth);
-    printf("[analys]\t end\n");
     _exit(EXIT_SUCCESS);
 }
 
 // 3. Executes the main routine
 run_monitor(pid_reader, pipe_synth);
-printf("[monitor]\t end\n");
 
 // 4. Wait the 3 processes
 for (int i = 0; i < 3; i++) {
@@ -218,7 +211,7 @@ void normalize(int n_samples, int input_size, double data[n_samples][input_size]
 }
 
 
-void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
+void run_reader(int pipe_in[INPUT_DIM][2], int pipe_ref[2]) {
     /* reader */
 
     /*
@@ -240,17 +233,40 @@ void run_reader(int pipe_in[4][2], int pipe_ref[2]) {
         pause();
     }
 
-    // write inputs for Application
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        for (int j = 0; j < INPUT_DIM; j++) {
-            write(pipe_in[j][1], &linear_sample_vector[i][j], sizeof(double));
-        }
+    // open data file
+    FILE *file = fopen("data_iris.csv", "r");
+    if (file == NULL) {
+        perror("Erro ao abrir o arquivo data_iris.csv");
+        exit(EXIT_FAILURE);
     }
 
-    // write reference values for analyser
-    for (int i = 0; i < NB_SAMPLES; i++) {
-        write(pipe_ref[1], &ref_values[i], sizeof(int));
+    double sample[INPUT_DIM];
+    int ref_val;
+    int count = 0;
+
+    // read the data file line by line
+    while (count < NB_SAMPLES && 
+           fscanf(file, "%lf;%lf;%lf;%lf;%d", 
+                  &sample[0], &sample[1], &sample[2], &sample[3], &ref_val) == 5) {
+        
+        // send the entries for the application through the input pipes
+        for (int j = 0; j < INPUT_DIM; j++) {
+            write(pipe_in[j][1], &sample[j], sizeof(double));
+        }
+
+        // send the reference value to Analyser
+        write(pipe_ref[1], &ref_val, sizeof(int));
+
+        count++;
     }
+
+    fclose(file);
+
+    // close descriptors before terminate
+    for (int i = 0; i < INPUT_DIM; i++) {
+        close(pipe_in[i][1]);
+    }
+    close(pipe_ref[1]);
 }
 
 
